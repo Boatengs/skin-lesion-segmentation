@@ -64,4 +64,4 @@ U-Net built from scratch in PyTorch:
 
 ## Live Demo
 
-- HuggingFace Space: https://huggingface.co/spaces/samboateng190/skin-lesion-segmentation
+- HuggingFace Space: https://huggingface.co/spaces/samurvivor-07/skin-lesion-segmentation
