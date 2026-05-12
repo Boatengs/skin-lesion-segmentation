@@ -61,3 +61,7 @@ U-Net built from scratch in PyTorch:
 - Project 3 Medical QA LoRA: https://github.com/Boatengs/medical-qa-lora
 - Project 2 SPORTZBOT RAG: https://github.com/Boatengs/sports-rag-chatbot-
 - Project 1 Sentiment Analyzer: https://github.com/Boatengs/sentiment-analyzer
+
+## Live Demo
+
+- HuggingFace Space: https://huggingface.co/spaces/samboateng190/skin-lesion-segmentation
