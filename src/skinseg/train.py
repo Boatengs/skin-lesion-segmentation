@@ -76,7 +76,11 @@ def predict(model: nn.Module, imgs: np.ndarray, batch: int = 64) -> np.ndarray:
     return np.concatenate(out)
 
 
-def run(split: str, seed: int, data: Path, out: Path, epochs: int = EPOCHS, base: int = BASE, limit: int | None = None) -> dict:
+def run(split: str, seed: int, data: Path, out: Path, epochs: int = EPOCHS, base: int = BASE, limit: int | None = None,
+        budget_minutes: float | None = None) -> dict | None:
+    """Train, or continue from out/state.pt. With a time budget, stop cleanly before
+    the budget runs out, save state.pt and return None so a later job can resume."""
+    start = time.time()
     torch.set_num_threads(os.cpu_count() or 1)
     torch.manual_seed(seed)
     out.mkdir(parents=True, exist_ok=True)
@@ -93,8 +97,22 @@ def run(split: str, seed: int, data: Path, out: Path, epochs: int = EPOCHS, base
     opt = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)
     sched = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, mode="min", patience=3, factor=0.5)
     g = torch.Generator().manual_seed(seed)
-    history, best = [], float("inf")
-    for epoch in range(epochs):
+    history, best, first = [], float("inf"), 0
+    state_path = out / "state.pt"
+    if state_path.exists():
+        st = torch.load(state_path, weights_only=False)
+        model.load_state_dict(st["model"])
+        opt.load_state_dict(st["opt"])
+        sched.load_state_dict(st["sched"])
+        g.set_state(st["generator"])
+        history, best, first = st["history"], st["best"], st["epoch"]
+        print(f"resuming after epoch {first}", flush=True)
+    for epoch in range(first, epochs):
+        if budget_minutes and history:
+            slowest = max(h["seconds"] for h in history)
+            if (time.time() - start) + 1.2 * slowest > budget_minutes * 60:
+                print(f"time budget reached, stopping after epoch {epoch}", flush=True)
+                return None
         t0 = time.time()
         model.train()
         order = torch.randperm(len(train), generator=g).numpy()
@@ -120,6 +138,8 @@ def run(split: str, seed: int, data: Path, out: Path, epochs: int = EPOCHS, base
         history.append({"epoch": epoch + 1, "train_loss": tot / len(order), "val_loss": vloss, "val_dice": vdice,
                         "lr": opt.param_groups[0]["lr"], "saved": saved, "seconds": time.time() - t0})
         print(json.dumps(history[-1]), flush=True)
+        torch.save({"model": model.state_dict(), "opt": opt.state_dict(), "sched": sched.state_dict(),
+                    "generator": g.get_state(), "history": history, "best": best, "epoch": epoch + 1}, state_path)
 
     model.load_state_dict(torch.load(out / "model.pth"))
     probs = predict(model, np.asarray(imgs[test]))
@@ -129,6 +149,7 @@ def run(split: str, seed: int, data: Path, out: Path, epochs: int = EPOCHS, base
             "epochs": epochs, "best_val_loss": best, "test_dice_at_0.5": float(dice(probs > 0.5, np.asarray(masks[test])).mean()),
             "history": history}
     (out / "run.json").write_text(json.dumps(info, indent=1))
+    state_path.unlink(missing_ok=True)
     return info
 
 
@@ -139,8 +160,9 @@ def main() -> None:
     ap.add_argument("--data", type=Path, default=Path("data"))
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--epochs", type=int, default=EPOCHS)
+    ap.add_argument("--budget-minutes", type=float, default=None)
     a = ap.parse_args()
-    run(a.split, a.seed, a.data, a.out, a.epochs)
+    run(a.split, a.seed, a.data, a.out, a.epochs, budget_minutes=a.budget_minutes)
 
 
 if __name__ == "__main__":
