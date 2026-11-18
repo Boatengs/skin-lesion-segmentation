@@ -3,3 +3,9 @@ __pycache__/
 .env
 .DS_Store
 *.pth
+!models/*.pth
+data/
+runs/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/

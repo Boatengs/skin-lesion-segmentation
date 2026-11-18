@@ -1,0 +1,83 @@
+name: train and evaluate
+on:
+  workflow_dispatch:
+  push:
+    branches: [lesion-split-v2]
+    paths: [".github/workflows/train.yml"]
+permissions:
+  contents: write
+jobs:
+  data:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: |
+          pip install -q torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -q -e .
+      - name: Download HAM10000 images and masks, build the 128 pixel cache
+        run: python -m skinseg.data data
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ham10000-seg-cache
+          path: |
+            data/metadata.csv
+            data/images128.npy
+            data/masks128.npy
+          compression-level: 1
+          retention-days: 7
+  train:
+    needs: data
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        split: [image, lesion]
+        seed: [42, 1, 2]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: |
+          pip install -q torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -q -e .
+      - uses: actions/download-artifact@v4
+        with: {name: ham10000-seg-cache, path: data}
+      - run: python -m skinseg.train --split ${{ matrix.split }} --seed ${{ matrix.seed }} --out runs/${{ matrix.split }}-s${{ matrix.seed }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: run-${{ matrix.split }}-s${{ matrix.seed }}
+          path: runs/${{ matrix.split }}-s${{ matrix.seed }}
+          retention-days: 30
+  report:
+    needs: train
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: |
+          pip install -q torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -q -e .
+      - uses: actions/download-artifact@v4
+        with: {name: ham10000-seg-cache, path: data}
+      - uses: actions/download-artifact@v4
+        with: {pattern: run-*, path: runs}
+      - run: |
+          for d in runs/run-*; do mv "$d" "runs/${d#runs/run-}"; done
+          ls runs
+          python -m skinseg.report --runs runs --data data --out results
+          cp runs/lesion-s42/model.pth models/unet32_lesion_split.pth || true
+      - name: Commit results
+        run: |
+          git config user.name "Sam Boateng"
+          git config user.email "32736261+Boatengs@users.noreply.github.com"
+          git add results models
+          git diff --cached --quiet || git commit -m "Version 2 results: image split vs lesion split"
+          git pull --rebase
+          git push

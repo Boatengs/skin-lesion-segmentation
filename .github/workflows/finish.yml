@@ -1,0 +1,141 @@
+name: finish the two cancelled runs
+# Run 44129718150 trained all six models, but lesion-s42 and image-s2 landed on slow
+# runners and hit the job time limit. This trains only those two, saving state
+# after every epoch and continuing in the next stage if a stage runs out of time,
+# then builds the report from all six runs.
+on:
+  workflow_dispatch:
+  push:
+    branches: [lesion-split-v2]
+    paths: [".github/workflows/finish.yml"]
+permissions:
+  contents: write
+  actions: read
+jobs:
+  stage1:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {run: lesion-s42, split: lesion, seed: 42}
+          - {run: image-s2, split: image, seed: 2}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: |
+          pip install -q torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -q -e .
+      - uses: actions/download-artifact@v4
+        with: {name: ham10000-seg-cache, path: data, run-id: 44129718150, github-token: "${{ github.token }}"}
+      - name: Train, or continue from the saved state
+        run: |
+          if [ -f runs/${{ matrix.run }}/run.json ]; then echo "already finished"; exit 0; fi
+          python -m skinseg.train --split ${{ matrix.split }} --seed ${{ matrix.seed }} --out runs/${{ matrix.run }} --budget-minutes 300
+      - uses: actions/upload-artifact@v4
+        with:
+          name: part-${{ matrix.run }}
+          path: runs/${{ matrix.run }}
+          overwrite: true
+          retention-days: 30
+  stage2:
+    needs: stage1
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {run: lesion-s42, split: lesion, seed: 42}
+          - {run: image-s2, split: image, seed: 2}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: |
+          pip install -q torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -q -e .
+      - uses: actions/download-artifact@v4
+        with: {name: ham10000-seg-cache, path: data, run-id: 44129718150, github-token: "${{ github.token }}"}
+      - uses: actions/download-artifact@v4
+        with:
+          name: part-${{ matrix.run }}
+          path: runs/${{ matrix.run }}
+      - name: Train, or continue from the saved state
+        run: |
+          if [ -f runs/${{ matrix.run }}/run.json ]; then echo "already finished"; exit 0; fi
+          python -m skinseg.train --split ${{ matrix.split }} --seed ${{ matrix.seed }} --out runs/${{ matrix.run }} --budget-minutes 300
+      - uses: actions/upload-artifact@v4
+        with:
+          name: part-${{ matrix.run }}
+          path: runs/${{ matrix.run }}
+          overwrite: true
+          retention-days: 30
+  stage3:
+    needs: stage2
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {run: lesion-s42, split: lesion, seed: 42}
+          - {run: image-s2, split: image, seed: 2}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: |
+          pip install -q torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -q -e .
+      - uses: actions/download-artifact@v4
+        with: {name: ham10000-seg-cache, path: data, run-id: 44129718150, github-token: "${{ github.token }}"}
+      - uses: actions/download-artifact@v4
+        with:
+          name: part-${{ matrix.run }}
+          path: runs/${{ matrix.run }}
+      - name: Train, or continue from the saved state
+        run: |
+          if [ -f runs/${{ matrix.run }}/run.json ]; then echo "already finished"; exit 0; fi
+          python -m skinseg.train --split ${{ matrix.split }} --seed ${{ matrix.seed }} --out runs/${{ matrix.run }} --budget-minutes 300
+      - uses: actions/upload-artifact@v4
+        with:
+          name: part-${{ matrix.run }}
+          path: runs/${{ matrix.run }}
+          overwrite: true
+          retention-days: 30
+  report:
+    needs: stage3
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: |
+          pip install -q torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -q -e .
+      - uses: actions/download-artifact@v4
+        with: {name: ham10000-seg-cache, path: data, run-id: 44129718150, github-token: "${{ github.token }}"}
+      - uses: actions/download-artifact@v4
+        with: {pattern: run-*, path: runs, run-id: 44129718150, github-token: "${{ github.token }}"}
+      - uses: actions/download-artifact@v4
+        with: {pattern: part-*, path: runs}
+      - run: |
+          for d in runs/run-* runs/part-*; do mv "$d" "runs/${d#runs/*-}"; done
+          ls runs
+          for d in runs/*; do test -f "$d/run.json" || { echo "missing $d/run.json"; exit 1; }; done
+          test "$(ls runs | wc -l)" = 6
+          python -m skinseg.report --runs runs --data data --out results
+          mkdir -p models
+          cp runs/lesion-s42/model.pth models/unet32_lesion_split.pth
+      - name: Commit results
+        run: |
+          git config user.name "Sam Boateng"
+          git config user.email "32736261+Boatengs@users.noreply.github.com"
+          git add results models
+          git diff --cached --quiet || git commit -m "Version 2 results: image split vs lesion split"
+          git pull --rebase
+          git push
