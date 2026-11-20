@@ -70,6 +70,7 @@ Basal cell carcinoma, actinic keratosis and vascular lesions are the weak spots.
 * `models/unet32_lesion_split.pth`: weights from the seed 42 lesion split run.
 * `.github/workflows/train.yml` and `finish.yml`: the runs that produced these results. Training saves its state after each epoch and continues in a new job if a runner is too slow to finish within GitHub's time limit.
 * `skin_lesion_segmentation.ipynb`: the original version 1 notebook.
+* `space/`: the Hugging Face Space demo. `app.py` loads the seed 42 lesion split weights from this repository; `unet.py` is a copy of `src/skinseg/model.py` so the Space runs without installing the package.
 
 ## Run it
 
